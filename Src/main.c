@@ -2,30 +2,44 @@
 #include <stdio.h>
 #include <main.h>
 
+#include "led.h"
+
 #if !defined(__SOFT_FP__) && defined(__ARM_FP)
   #warning "FPU is not initialized, but the project is compiling for an FPU. Please initialize the FPU before use."
 #endif
 
+void idle_task(void);
 void task1_handler(void);
 void task2_handler(void);
 void task3_handler(void);
 void task4_handler(void);
 
 void enable_processor_faults(void);
+
 __attribute__((naked)) void init_scheduler_stack(uint32_t sched_top_of_stack);
-void init_tasks_stack(void);
+
+void init_tasks(void);
+
 void init_systick_timer(uint32_t tick_hz);
+
 __attribute__((naked)) void switch_sp_to_psp(void);
 
+void task_delay(uint32_t tick_count);
 
-uint32_t psp_of_tasks[MAX_TASKS] = {
-		T1_STACK_START,
-		T2_STACK_START,
-		T3_STACK_START,
-		T4_STACK_START
-};
-uint32_t task_handlers[MAX_TASKS];
-uint8_t current_task = 0;
+void schedule(void);
+
+
+typedef struct {
+	uint32_t psp_value;
+	uint32_t block_count;
+	uint8_t current_state;
+	void (*task_handler)(void);
+} TCB_t;
+
+TCB_t user_tasks[MAX_TASKS];
+
+uint8_t current_task = 1;
+uint32_t g_tick_count = 0;
 
 int main(void)
 {
@@ -34,12 +48,9 @@ int main(void)
 
 	init_scheduler_stack(SCHED_STACK_START);
 
-	task_handlers[0] = (uint32_t)task1_handler;
-	task_handlers[1] = (uint32_t)task2_handler;
-	task_handlers[2] = (uint32_t)task3_handler;
-	task_handlers[3] = (uint32_t)task4_handler;
+	init_tasks();
 
-	init_tasks_stack();
+	led_init_all();
 
 	init_systick_timer(TICK_HZ);
 
@@ -51,32 +62,50 @@ int main(void)
 	for(;;);
 }
 
+void idle_task(void)
+{
+	while(1);
+}
+
 void task1_handler(void)
 {
 	while(1)
 	{
-		printf("This is task1\n");
+		led_on(LED_GREEN);
+		task_delay(1000);
+		led_off(LED_GREEN);
+		task_delay(1000);
+
 	}
 }
 void task2_handler(void)
 {
 	while(1)
 	{
-		printf("This is task2\n");
+		led_on(LED_ORANGE);
+		task_delay(500);
+		led_off(LED_ORANGE);
+		task_delay(500);
 	}
 }
 void task3_handler(void)
 {
 	while(1)
 	{
-		printf("This is task3\n");
+		led_on(LED_RED);
+		task_delay(250);
+		led_off(LED_RED);
+		task_delay(250);
 	}
 }
 void task4_handler(void)
 {
 	while(1)
 	{
-		printf("This is task4\n");
+		led_on(LED_BLUE);
+		task_delay(125);
+		led_off(LED_BLUE);
+		task_delay(125);
 	}
 }
 
@@ -94,18 +123,38 @@ __attribute__((naked)) void init_scheduler_stack(uint32_t sched_top_of_stack)
 	__asm volatile("BX LR");
 }
 
-void init_tasks_stack(void)
+
+void init_tasks(void)
 {
+	user_tasks[0].current_state = TASK_READY_STATE;
+	user_tasks[1].current_state = TASK_READY_STATE;
+	user_tasks[2].current_state = TASK_READY_STATE;
+	user_tasks[3].current_state = TASK_READY_STATE;
+	user_tasks[4].current_state = TASK_READY_STATE;
+
+	user_tasks[0].psp_value = IDLE_STACK_START;
+	user_tasks[1].psp_value = T1_STACK_START;
+	user_tasks[2].psp_value = T2_STACK_START;
+	user_tasks[3].psp_value = T3_STACK_START;
+	user_tasks[4].psp_value = T4_STACK_START;
+
+	user_tasks[0].task_handler = idle_task;
+	user_tasks[1].task_handler = task1_handler;
+	user_tasks[2].task_handler = task2_handler;
+	user_tasks[3].task_handler = task3_handler;
+	user_tasks[4].task_handler = task4_handler;
+
+
 	volatile uint32_t* pPSP;
 	for(uint8_t i = 0; i < MAX_TASKS; i++)
 	{
-		pPSP = (uint32_t*)psp_of_tasks[i];
+		pPSP = (uint32_t*)user_tasks[i].psp_value;
 
 		pPSP--; // XPSR
 		*pPSP = DUMMY_XPSR; // 0x01000000
 
 		pPSP--; // PC
-		*pPSP = task_handlers[i];
+		*pPSP = (uint32_t)user_tasks[i].task_handler;
 
 		pPSP--; // LR
 		*pPSP = 0xFFFFFFFD;
@@ -116,25 +165,35 @@ void init_tasks_stack(void)
 			*pPSP = 0x00000000;
 		}
 
-		psp_of_tasks[i] = (uint32_t)pPSP;
+		user_tasks[i].psp_value = (uint32_t)pPSP;
 	}
 }
 
 
 void save_psp_value(uint32_t stack_addr)
 {
-	psp_of_tasks[current_task] = stack_addr;
+	user_tasks[current_task].psp_value = stack_addr;
 }
 
 void update_next_task()
 {
-	current_task++;
-	current_task %= MAX_TASKS;
+	int state = TASK_BLOCKED_STATE;
+
+	for (int i = 0; i < (MAX_TASKS); i++)
+	{
+		current_task++;
+		current_task %= MAX_TASKS;
+		state = user_tasks[current_task].current_state;
+		if ((state == TASK_READY_STATE) && (current_task != 0))
+			break;
+	}
+	if (state != TASK_READY_STATE)
+		current_task = 0;
 }
 
 uint32_t get_psp_value()
 {
-	return psp_of_tasks[current_task];
+	return user_tasks[current_task].psp_value;
 }
 
 __attribute__((naked)) void switch_sp_to_psp(void)
@@ -164,7 +223,49 @@ void init_systick_timer(uint32_t tick_hz)
 	*pSCSR |= (1 << 0); // Enable the counter
 }
 
-__attribute((naked)) void SysTick_Handler(void)
+void schedule(void)
+{
+	uint32_t *pICSR = (uint32_t*)0xE000ED04;
+	*pICSR |= (1 << 28);
+}
+
+void task_delay(uint32_t tick_count)
+{
+	if (current_task) {
+		user_tasks[current_task].block_count = g_tick_count + tick_count;
+		user_tasks[current_task].current_state = TASK_BLOCKED_STATE;
+		schedule();
+	}
+}
+
+void update_global_tick_count()
+{
+	g_tick_count++;
+
+}
+
+void unblock_tasks()
+{
+	for(int i = 1; i < MAX_TASKS; i++)
+	{
+		if (user_tasks[i].current_state != TASK_READY_STATE)
+		{
+			if (user_tasks[i].block_count == g_tick_count)
+			{
+				user_tasks[i].current_state = TASK_READY_STATE;
+			}
+		}
+	}
+}
+
+void SysTick_Handler(void)
+{
+	update_global_tick_count();
+	unblock_tasks();
+	schedule();
+}
+
+__attribute((naked)) void PendSV_Handler(void)
 {
 	/* Save context of the running task */
 	/*
