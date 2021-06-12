@@ -34,4 +34,16 @@
 #define TASK_READY_STATE 0x00
 #define TASK_BLOCKED_STATE 0xFF
 
+#define disable_irq() 					\
+do {									\
+	__asm volatile("MOV R0,#1");		\
+	__asm volatile("MSR PRIMASK,R0");	\
+} while(0)
+
+#define enable_irq()					\
+do {									\
+	__asm volatile("MOV R0,#0");		\
+	__asm volatile("MSR PRIMASK,R0");	\
+} while(0)
+
 #endif /* MAIN_H_ */

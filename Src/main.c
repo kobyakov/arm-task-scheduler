@@ -231,11 +231,13 @@ void schedule(void)
 
 void task_delay(uint32_t tick_count)
 {
+	disable_irq();
 	if (current_task) {
 		user_tasks[current_task].block_count = g_tick_count + tick_count;
 		user_tasks[current_task].current_state = TASK_BLOCKED_STATE;
 		schedule();
 	}
+	enable_irq();
 }
 
 void update_global_tick_count()
